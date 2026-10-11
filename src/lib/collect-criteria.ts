@@ -160,6 +160,18 @@ export function withinFetchRange(publishedAt: Date | null, days: number, now = n
   return age <= days * 24 * 60 * 60 * 1000 + graceMs;
 }
 
+export function displaySource(source: string, pageUrl: string): string {
+  const cleaned = plainText(source).replace(/\s+on\s+MSN$/i, "").trim();
+  const looksLikeUrl = /^https?:\/\//i.test(cleaned) || /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(cleaned);
+  if (cleaned && !looksLikeUrl) return cleaned;
+  try {
+    const host = new URL(/^https?:\/\//i.test(cleaned) ? cleaned : pageUrl).hostname.replace(/^www\./, "");
+    return host || "뉴스";
+  } catch {
+    return cleaned || "뉴스";
+  }
+}
+
 export function formatKoreanDate(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Seoul",
@@ -233,12 +245,19 @@ export function plainText(value: string): string {
     .trim();
 }
 
-export function firstSentence(value: string, max = 150): string {
+const LEAD_NOISE =
+  /이전\s*기사|다음\s*기사|글자\s*크|무단\s*전재|저작권|관련\s*기사|댓글|공유하기|구독|로그인|챗\s*GPT|이미지입니다|제공\s*[=＝]|본문\s*내용|기사입력|입력\s*20\d{2}|업데이트\s*20\d{2}|사진\s*=|기자\s*[가-힣]{2,4}\s/;
+
+export function leadSentence(value: string, max = 150): string {
   const clean = plainText(value);
   if (!clean) return "";
-  const match = clean.match(/^.{24,150}?[.!?。]/);
-  const sentence = (match ? match[0] : clean.slice(0, max)).trim();
-  return sentence.length > max ? `${sentence.slice(0, max - 1).trim()}…` : sentence;
+  const parts = clean.split(/(?<=[.!?。])\s+/);
+  for (const part of parts) {
+    const sentence = part.trim();
+    if (sentence.length < 28 || LEAD_NOISE.test(sentence)) continue;
+    return sentence.length > max ? `${sentence.slice(0, max - 1).trim()}…` : sentence;
+  }
+  return "";
 }
 
 function requiredText(value: unknown, label: string): string {

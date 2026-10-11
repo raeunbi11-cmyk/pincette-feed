@@ -7,6 +7,8 @@ import {
   dedupeArticles,
   excludedByRules,
   isBlockedPublisher,
+  displaySource,
+  leadSentence,
   parseCollectInput,
   scoreArticle,
   withinFetchRange,
@@ -109,6 +111,17 @@ test("extracts the article body and ignores navigation", () => {
   assert.match(extracted.text, /MOU를 체결했다/);
   assert.equal(extracted.description, "한 줄 설명");
   assert.doesNotMatch(extracted.text, /로그인/);
+});
+
+test("skips news-site chrome and keeps the article sentence", () => {
+  const noisy = "이전 기사보기 다음 기사보기 글자크기로 변경됩니다. 국내 주요 제약사들이 디지털 헬스케어 사업 확대에 속도를 내고 있다.";
+  assert.equal(leadSentence(noisy), "국내 주요 제약사들이 디지털 헬스케어 사업 확대에 속도를 내고 있다.");
+});
+
+test("shows a publisher name instead of a raw site URL", () => {
+  assert.equal(displaySource("바이오타임즈", "https://www.biotimes.co.kr/news/1"), "바이오타임즈");
+  assert.equal(displaySource("https://www.dhtimes.co.kr/", "https://www.dhtimes.co.kr/news/1"), "dhtimes.co.kr");
+  assert.equal(displaySource("매일경제 on MSN", "https://www.msn.com/a"), "매일경제");
 });
 
 test("rejects a collect request without keywords", () => {

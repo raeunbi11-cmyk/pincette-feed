@@ -6,8 +6,9 @@ import {
   type CollectedArticle,
   compactText,
   dedupeArticles,
+  displaySource,
   excludedByRules,
-  firstSentence,
+  leadSentence,
   formatKoreanDate,
   isBingRedirect,
   isBlockedPublisher,
@@ -283,11 +284,10 @@ function selectDiverse(items: Candidate[], perKeyword: number, maxTotal: number)
 }
 
 function toArticle(item: Candidate): CollectedArticle {
-  const evidence = item.bodyText || item.description || item.title;
-  const sentence = firstSentence(evidence) || item.title;
+  const sentence = leadSentence(item.bodyText) || leadSentence(item.description) || item.title;
   return {
     id: articleId(item.url, item.title),
-    source: item.source || "뉴스",
+    source: displaySource(item.source, item.url),
     date: item.publishedAt ? formatKoreanDate(item.publishedAt) : formatKoreanDate(new Date()),
     title: item.title,
     summary: `${sentence} ${item.score}점`,

@@ -15,6 +15,9 @@ const NOISE_SELECTORS = [
   "header",
   "form",
   "aside",
+  "button",
+  "figure",
+  "figcaption",
   "[role='navigation']",
   "[role='banner']",
   ".ad",
@@ -24,6 +27,9 @@ const NOISE_SELECTORS = [
   ".reply",
   "#comment",
   ".comment",
+  ".article-tools",
+  ".tool_box",
+  ".font_size",
 ].join(", ");
 
 const BODY_SELECTORS = [
@@ -63,9 +69,19 @@ export function extractArticleText(html: string): ArticleText {
 
   $(NOISE_SELECTORS).remove();
 
+  const paragraphText = (selector: string) => {
+    const chunks: string[] = [];
+    $(selector).first().find("p").each((_, element) => {
+      const paragraph = plainText($(element).text());
+      if (paragraph.length >= 40) chunks.push(paragraph);
+    });
+    return chunks.slice(0, 4).join(" ");
+  };
+
   let text = "";
   for (const selector of BODY_SELECTORS) {
-    const candidate = plainText($(selector).first().text());
+    const fromParagraphs = paragraphText(selector);
+    const candidate = fromParagraphs.length >= 80 ? fromParagraphs : plainText($(selector).first().text());
     if (candidate.length > text.length) text = candidate;
     if (text.length > 500) break;
   }
