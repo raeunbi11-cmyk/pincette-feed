@@ -2346,37 +2346,35 @@
         }
 
 
+        let feedEmptyState = null;
+
         function renderFeed() {
 
             const container = document.getElementById('feed-container');
 
-            const emptyState = document.getElementById('feed-empty-state');
+            if (!feedEmptyState) feedEmptyState = document.getElementById('feed-empty-state');
 
-           
-
-            // Filter out deleted items from view
+            if (feedEmptyState && feedEmptyState.parentNode) feedEmptyState.remove();
 
             const visibleArticles = state.articles.filter(a => a.status !== 'deleted');
-
-
- 
 
             if (visibleArticles.length === 0) {
 
                 container.innerHTML = '';
 
-                container.appendChild(emptyState);
+                if (feedEmptyState) {
 
-                emptyState.style.display = 'block';
+                    feedEmptyState.style.display = 'block';
+
+                    container.appendChild(feedEmptyState);
+
+                }
 
                 return;
 
             }
 
-
- 
-
-            emptyState.style.display = 'none';
+            if (feedEmptyState) feedEmptyState.style.display = 'none';
 
             container.innerHTML = visibleArticles.map((article, idx) => {
 
