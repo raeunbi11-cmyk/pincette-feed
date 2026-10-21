@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 90;
+
+const MODEL = "gemini-3.8-flash";
+const ATTEMPT_MS = 20_000;
+const RETRY_PAUSE_MS = 1_500;
+const MAX_ATTEMPTS = 2;
 
 type InsightLog = { title?: unknown; reason?: unknown };
 
@@ -48,99 +53,15 @@ ${lines}
 }`;
 }
 
-export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, { status: 400 });
-  }
-
-  const raw = body && typeof body === "object" ? (body as { apiKey?: unknown; logs?: unknown }) : {};
-  const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
-  if (!apiKey) {
-    return NextResponse.json({ error: "Gemini API 키가 없습니다." }, { status: 400 });
-  }
-
-  const logs = Array.isArray(raw.logs) ? (raw.logs as InsightLog[]).slice(0, 15) : [];
-  if (logs.length === 0) {
-    return NextResponse.json({ error: "분석할 삭제 기록이 없습니다." }, { status: 400 });
-  }
-
-  try {
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: insightPrompt(logs) }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            maxOutputTokens: 2048,
-            thinkingConfig: { thinkingLevel: "low" },
-          },
-        }),
-      },
-    );
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message =
-        data && typeof data === "object" && "error" in data
-          ? String((data as { error?: { message?: unknown } }).error?.message || "")
-          : "";
-      return NextResponse.json(
-        { error: message || `Gemini 오류 (상태 코드: ${response.status})` },
-        { status: 502 },
-      );
-    }
-
-    const parts = (
-      data as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }
-    ).candidates?.[0]?.content?.parts || [];
-    let text = parts
-      .filter((part) => part?.text && !part.thought)
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-    if (!text) {
-      text = parts
-        .map((part) => part?.text)
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-    }
-    if (!text) {
-      return NextResponse.json({ error: "AI가 응답을 반환하지 않았습니다." }, { status: 502 });
-    }
-
-    const parsed = parseModelJson(text);
-    const suggestedRules = Array.isArray(parsed)
-      ? parsed.filter((rule): rule is string => typeof rule === "string" && rule.trim().length > 0)
-      : parsed &&
-          typeof parsed === "object" &&
-          Array.isArray((parsed as { suggestedRules?: unknown }).suggestedRules)
-        ? (parsed as { suggestedRules: unknown[] }).suggestedRules.filter(
-            (rule): rule is string => typeof rule === "string" && rule.trim().length > 0,
-          )
-        : [];
-    const summary =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof (parsed as { summary?: unknown }).summary === "string"
-        ? (parsed as { summary: string }).summary
-        : "삭제한 기사에서 반복되는 제외 기준을 골랐습니다.";
-
-    if (suggestedRules.length === 0) {
-      return NextResponse.json({ error: "AI 응답에 제외 규칙이 없습니다." }, { status: 502 });
-    }
-
-    return NextResponse.json({ summary, suggestedRules });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Gemini 호출에 실패했습니다.";
-    console.error("[insight]", message);
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
+function geminiErrorText(data: unknown): string {
+  if (!data || typeof data !== "object" || !("error" in data)) return "";
+  const message = (data as { error?: { message?: unknown } }).error?.message;
+  return typeof message === "string" ? message.trim() : "";
 }
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 503 || status === 504;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError"
