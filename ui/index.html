@@ -2481,11 +2481,13 @@
 
                
 
-                let cardClass = "bg-white p-5 rounded-xl border border-slate-200 shadow-sm transition-all relative overflow-hidden group";
+                let cardClass = "p-5 rounded-xl border shadow-sm transition-all relative overflow-hidden group";
 
-                if (isImportant) cardClass += " ring-2 ring-amber-400 bg-amber-50/30";
+                if (isImportant) cardClass += " bg-amber-50/40 border-amber-200 ring-2 ring-amber-400";
 
-                if (isUseful) cardClass += " opacity-60 bg-slate-50";
+                else if (isUseful) cardClass += " bg-brand-50 border-brand-100 ring-1 ring-brand-500";
+
+                else cardClass += " bg-white border-slate-200";
 
 
  
@@ -2534,9 +2536,9 @@
 
                         </button>
 
-                        <button onclick="markAction('${article.id}', 'useful')" class="flex-1 py-1.5 text-sm font-medium rounded-md flex items-center justify-center gap-1 transition-colors ${isUseful ? 'bg-slate-200 text-slate-700' : 'text-slate-600 hover:bg-slate-100'}">
+                        <button onclick="markAction('${article.id}', 'useful')" class="flex-1 py-1.5 text-sm font-medium rounded-md flex items-center justify-center gap-1 transition-colors ${isUseful ? 'bg-brand-100 text-brand-700' : 'text-slate-600 hover:bg-slate-100'}">
 
-                            <i class="${isUseful ? 'ph-fill text-slate-500' : 'ph'} ph-thumbs-up"></i> 유용
+                        <i class="${isUseful ? 'ph-fill text-brand-600' : 'ph'} ph-thumbs-up"></i> 유용
 
                         </button>
 
