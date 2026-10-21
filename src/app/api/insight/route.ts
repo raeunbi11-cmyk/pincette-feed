@@ -64,4 +64,135 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "TimeoutError"
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+function friendlyGeminiError(message: string, status: number): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("high demand") || lower.includes("try again later") || status === 503) {
+    return "Gemini 서버가 요청을 많이 받아 이번 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
+  }
+  if (status === 504 || lower.includes("deadline")) {
+    return "Gemini가 응답 시간 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
+  }
+  if (message) return message;
+  return `Gemini 오류 (상태 코드: ${status})`;
+}
+
+async function requestInsight(apiKey: string, prompt: string): Promise<{ data: unknown } | { error: string }> {
+  let lastError = "Gemini가 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              maxOutputTokens: 2048,
+              thinkingConfig: { thinkingLevel: "low" },
+            },
+          }),
+          signal: AbortSignal.timeout(ATTEMPT_MS),
+        },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) return { data };
+
+      const message = geminiErrorText(data);
+      lastError = friendlyGeminiError(message, response.status);
+      if (!isRetryableStatus(response.status)) return { error: lastError };
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        lastError = "Gemini가 20초 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
+      } else {
+        lastError = error instanceof Error ? error.message : "Gemini 호출에 실패했습니다.";
+      }
+    }
+
+    if (attempt < MAX_ATTEMPTS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
+    }
+  }
+
+  return { error: lastError };
+}
+
+export async function POST(request: Request) {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, { status: 400 });
+  }
+
+  const raw = body && typeof body === "object" ? (body as { apiKey?: unknown; logs?: unknown }) : {};
+  const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
+  if (!apiKey) {
+    return NextResponse.json({ error: "Gemini API 키가 없습니다." }, { status: 400 });
+  }
+
+  const logs = Array.isArray(raw.logs) ? (raw.logs as InsightLog[]).slice(0, 15) : [];
+  if (logs.length === 0) {
+    return NextResponse.json({ error: "분석할 삭제 기록이 없습니다." }, { status: 400 });
+  }
+
+  try {
+    const result = await requestInsight(apiKey, insightPrompt(logs));
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 502 });
+    }
+    const data = result.data;
+
+    const parts = (
+      data as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }
+    ).candidates?.[0]?.content?.parts || [];
+    let text = parts
+      .filter((part) => part?.text && !part.thought)
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+    if (!text) {
+      text = parts
+        .map((part) => part?.text)
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    }
+    if (!text) {
+      return NextResponse.json({ error: "AI가 응답을 반환하지 않았습니다." }, { status: 502 });
+    }
+
+    const parsed = parseModelJson(text);
+    const suggestedRules = Array.isArray(parsed)
+      ? parsed.filter((rule): rule is string => typeof rule === "string" && rule.trim().length > 0)
+      : parsed &&
+          typeof parsed === "object" &&
+          Array.isArray((parsed as { suggestedRules?: unknown }).suggestedRules)
+        ? (parsed as { suggestedRules: unknown[] }).suggestedRules.filter(
+            (rule): rule is string => typeof rule === "string" && rule.trim().length > 0,
+          )
+        : [];
+    const summary =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof (parsed as { summary?: unknown }).summary === "string"
+        ? (parsed as { summary: string }).summary
+        : "삭제한 기사에서 반복되는 제외 기준을 골랐습니다.";
+
+    if (suggestedRules.length === 0) {
+      return NextResponse.json({ error: "AI 응답에 제외 규칙이 없습니다." }, { status: 502 });
+    }
+
+    return NextResponse.json({ summary, suggestedRules });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Gemini 호출에 실패했습니다.";
+    console.error("[insight]", message);
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
+}
