@@ -2185,140 +2185,69 @@
  
 
         async function runInsightAnalysis() {
+    if (state.deletedLog.length < 3) {
+        alert("삭제 히스토리가 너무 적습니다. 최소 3개 이상의 기사를 삭제(불필요) 처리한 후 실행해보세요.");
+        return;
+    }
 
-            if (state.deletedLog.length < 3) {
+    const recentLogs = state.deletedLog.slice(0, 15);
+    const resultsDiv = document.getElementById('insight-results');
+    const summaryEl = document.getElementById('insight-summary');
+    const suggestionsEl = document.getElementById('insight-suggestions');
 
-                alert("삭제 히스토리가 너무 적습니다. 최소 3개 이상의 기사를 삭제(불필요) 처리한 후 실행해보세요.");
+    resultsDiv.classList.remove('hidden');
+    summaryEl.innerHTML = '<div class="spinner spinner-dark inline-block mr-2"></div> AI가 삭제 기록 패턴을 분석 중입니다...';
+    suggestionsEl.innerHTML = '';
 
-                return;
-
+    let result = null;
+    let aiError = '';
+    if (state.apiKey) {
+        try {
+            const response = await fetch('/api/insight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    apiKey: state.apiKey,
+                    logs: recentLogs.map(log => ({ title: log.title, reason: log.reason }))
+                })
+            });
+            const ai = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(ai.error || `인사이트 서버 오류 (상태 코드: ${response.status})`);
             }
 
-
- 
-
-            // Get recent max 15 deletes
-
-            const recentLogs = state.deletedLog.slice(0, 15);
-
-            const logsText = recentLogs.map(l => `- 기사: ${l.title}\n  사유: ${l.reason}`).join('\n');
-
-
- 
-
-            const prompt = `
-
-            너는 뉴스 데이터 분석가야. 사용자가 '불필요하다'고 판단하여 삭제한 기사와 그 사유 목록이 아래에 있어.
-
-            이 데이터를 분석해서 다음 수집 때부터 필터링 기준으로 삼을 만한 공통된 패턴(노이즈)을 찾아서 블랙리스트(제외 규칙)를 2~3개 제안해줘.
-
-           
-
-            [삭제 데이터]
-
-            ${logsText}
-
-
- 
-
-            결과는 다음 JSON 형식에 맞춰서 반환해:
-
-            {
-
-              "summary": "최근 삭제된 기사들을 분석한 결과... (AI의 종합 의견 1~2문장)",
-
-              "suggestedRules": ["특정 병원 홍보성 기사 제외", "관련 없는 식음료 출시 기사 제외"]
-
+            if (ai && !Array.isArray(ai) && typeof ai.summary === 'string' && Array.isArray(ai.suggestedRules)) {
+                result = ai;
+            } else if (Array.isArray(ai)) {
+                result = {
+                    summary: '삭제한 기사에서 반복되는 제외 기준을 골랐습니다.',
+                    suggestedRules: ai.filter(rule => typeof rule === 'string' && rule.trim())
+                };
+            } else {
+                aiError = 'AI 응답에 제외 규칙이 없습니다.';
             }
-
-            `;
-
-
- 
-
-            const resultsDiv = document.getElementById('insight-results');
-
-            const summaryEl = document.getElementById('insight-summary');
-
-            const suggestionsEl = document.getElementById('insight-suggestions');
-
-           
-
-            resultsDiv.classList.remove('hidden');
-
-            summaryEl.innerHTML = '<div class="spinner spinner-dark inline-block mr-2"></div> AI가 삭제 기록 패턴을 분석 중입니다...';
-
-            suggestionsEl.innerHTML = '';
-
-
- 
-
-            let result = null;
-
-            if (state.apiKey) {
-
-                try {
-
-                    const ai = await callGemini(prompt, true);
-
-                    if (ai && !Array.isArray(ai) && typeof ai.summary === 'string' && Array.isArray(ai.suggestedRules)) {
-
-                        result = ai;
-
-                    } else if (Array.isArray(ai)) {
-
-                        result = {
-
-                            summary: '삭제한 기사에서 반복되는 제외 기준을 골랐습니다.',
-
-                            suggestedRules: ai.filter(rule => typeof rule === 'string' && rule.trim())
-
-                        };
-
-                    }
-
-                } catch (e) {
-
-                    console.error(e);
-
-                }
-
-            }
-
-            if (!result || !Array.isArray(result.suggestedRules) || result.suggestedRules.length === 0) {
-
-                const local = summarizeDeletedLogs(recentLogs);
-
-                const note = state.apiKey
-
-                    ? 'AI 응답을 사용하지 못해, 삭제 사유를 직접 집계했습니다. '
-
-                    : 'Gemini API 키가 없어 삭제 사유를 직접 집계했습니다. 우측 상단 환경설정에 키를 넣으면 AI 분석을 사용합니다. ';
-
-                result = { summary: note + local.summary, suggestedRules: local.suggestedRules };
-
-            }
-
-            summaryEl.innerText = result.summary;
-
-            suggestionsEl.innerHTML = result.suggestedRules.map(rule => `
-
-                <label class="flex items-start gap-2 bg-indigo-50/50 p-2 rounded border border-indigo-100 cursor-pointer hover:bg-indigo-50 transition-colors">
-
-                    <input type="checkbox" class="insight-checkbox mt-1 text-indigo-600 focus:ring-indigo-500 rounded border-slate-300" value="${escapeHtml(rule)}" checked>
-
-                    <span class="text-sm text-slate-700">${escapeHtml(rule)}</span>
-
-                </label>
-
-            `).join('');
-
+        } catch (e) {
+            console.error(e);
+            aiError = e && e.message ? e.message : String(e);
         }
+    }
 
+    if (!result || !Array.isArray(result.suggestedRules) || result.suggestedRules.length === 0) {
+        const local = summarizeDeletedLogs(recentLogs);
+        const note = aiError
+            ? `AI 호출이 거절되었습니다. ${aiError} `
+            : 'Gemini API 키가 없어 삭제 사유를 직접 집계했습니다. 우측 상단 환경설정에 키를 넣으면 AI 분석을 사용합니다. ';
+        result = { summary: note + local.summary, suggestedRules: local.suggestedRules };
+    }
 
- 
-
-        function applySuggestedRules() {
+    summaryEl.innerText = result.summary;
+    suggestionsEl.innerHTML = result.suggestedRules.map(rule => `
+        <label class="flex items-start gap-2 bg-indigo-50/50 p-2 rounded border border-indigo-100 cursor-pointer hover:bg-indigo-50 transition-colors">
+            <input type="checkbox" class="insight-checkbox mt-1 text-indigo-600 focus:ring-indigo-500 rounded border-slate-300" value="${escapeHtml(rule)}" checked>
+            <span class="text-sm text-slate-700">${escapeHtml(rule)}</span>
+        </label>
+    `).join('');
+}function applySuggestedRules() {
 
             const checkboxes = document.querySelectorAll('.insight-checkbox:checked');
 
