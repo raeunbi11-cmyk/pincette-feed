@@ -1,3 +1,4 @@
+import https from "node:https";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -63,20 +64,84 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 503 || status === 504;
 }
 
+class AttemptTimeoutError extends Error {
+  constructor() {
+    super("Gemini 응답 시간 초과");
+    this.name = "TimeoutError";
+  }
+}
+
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
+// fetch's AbortSignal.timeout does not always cut off a stalled response body on Vercel,
+// so each attempt uses node:https with a hard deadline that destroys the socket.
+function postJson(url: string, headers: Record<string, string>, payload: string, timeoutMs: number) {
+  return new Promise<{ status: number; data: unknown }>((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const req = https.request(
+      url,
+      {
+        method: "POST",
+        headers: { ...headers, "Content-Length": Buffer.byteLength(payload).toString() },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          let data: unknown = {};
+          try {
+            data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            data = {};
+          }
+          finish(() => resolve({ status: res.statusCode || 0, data }));
+        });
+        res.on("error", (error) => finish(() => reject(error)));
+      },
+    );
+
+    const timer = setTimeout(() => {
+      finish(() => reject(new AttemptTimeoutError()));
+      req.destroy();
+    }, timeoutMs);
+
+    req.on("error", (error) => finish(() => reject(error)));
+    req.end(payload);
+  });
+}
+
 function friendlyGeminiError(message: string, status: number): string {
   const lower = message.toLowerCase();
+  if (
+    lower.includes("api key not valid") ||
+    lower.includes("api_key_invalid") ||
+    lower.includes("api key expired") ||
+    status === 401
+  ) {
+    return "Gemini API 키가 올바르지 않습니다. 키를 확인한 뒤 다시 입력해 주세요.";
+  }
+  if (status === 403 || lower.includes("permission")) {
+    return "이 Gemini API 키로는 분석 모델을 사용할 수 없습니다. 키 권한을 확인해 주세요.";
+  }
+  if (status === 429 || lower.includes("quota") || lower.includes("rate limit")) {
+    return "Gemini 사용량 한도에 도달했습니다. 잠시 뒤 다시 요청해 주세요.";
+  }
   if (lower.includes("high demand") || lower.includes("try again later") || status === 503) {
     return "Gemini 서버가 요청을 많이 받아 이번 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
   }
   if (status === 504 || lower.includes("deadline")) {
     return "Gemini가 응답 시간 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
   }
-  if (message) return message;
-  return `Gemini 오류 (상태 코드: ${status})`;
+  return `Gemini가 요청을 처리하지 못했습니다. (상태 코드: ${status})`;
 }
 
 async function requestInsight(apiKey: string, prompt: string): Promise<{ data: unknown } | { error: string }> {
@@ -84,36 +149,33 @@ async function requestInsight(apiKey: string, prompt: string): Promise<{ data: u
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     try {
-      const response = await fetch(
+      const { status, data } = await postJson(
         `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey,
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              maxOutputTokens: 2048,
-              thinkingConfig: { thinkingLevel: "low" },
-            },
-          }),
-          signal: AbortSignal.timeout(ATTEMPT_MS),
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
+        JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            maxOutputTokens: 2048,
+            thinkingConfig: { thinkingLevel: "low" },
+          },
+        }),
+        ATTEMPT_MS,
       );
-      const data = await response.json().catch(() => ({}));
-      if (response.ok) return { data };
+      if (status >= 200 && status < 300) return { data };
 
       const message = geminiErrorText(data);
-      lastError = friendlyGeminiError(message, response.status);
-      if (!isRetryableStatus(response.status)) return { error: lastError };
+      lastError = friendlyGeminiError(message, status);
+      if (!isRetryableStatus(status)) return { error: lastError };
     } catch (error) {
       if (isTimeoutError(error)) {
         lastError = "Gemini가 20초 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
       } else {
-        lastError = error instanceof Error ? error.message : "Gemini 호출에 실패했습니다.";
+        console.error("[insight]", error instanceof Error ? error.message : error);
+        lastError = "Gemini 서버에 연결하지 못했습니다. 잠시 뒤 다시 요청해 주세요.";
       }
     }
 
@@ -191,8 +253,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ summary, suggestedRules });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Gemini 호출에 실패했습니다.";
-    console.error("[insight]", message);
-    return NextResponse.json({ error: message }, { status: 502 });
+    console.error("[insight]", error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: "AI 응답을 해석하지 못했습니다. 잠시 뒤 다시 요청해 주세요." }, { status: 502 });
   }
 }
