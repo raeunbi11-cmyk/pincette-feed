@@ -20,6 +20,9 @@
 
     <script src=https://unpkg.com/@phosphor-icons/web></script>
 
+    <!--PINCETTE_CONFIG-->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.min.js"></script>
+
    
 
     <script>
@@ -278,13 +281,42 @@
 
  
 
-            <!-- Settings -->
+            <!-- Account + Settings -->
 
-            <button onclick="openSettingsModal()" class="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors">
+            <div class="flex items-center gap-1">
 
-                <i class="ph ph-gear text-xl"></i>
+                <div id="account-area" class="relative hidden">
 
-            </button>
+                    <button id="btn-login" onclick="signInWithGoogle()" class="hidden flex items-center gap-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium px-3 py-1.5 rounded-lg shadow-sm transition-colors">
+                        <svg class="w-4 h-4" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+                        <span class="hidden sm:inline">Google로 로그인</span>
+                        <span class="sm:hidden">로그인</span>
+                    </button>
+
+                    <button id="btn-account" onclick="toggleAccountMenu()" class="hidden flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-slate-100 transition-colors" aria-haspopup="true">
+                        <span id="account-avatar" class="w-8 h-8 rounded-full bg-brand-500 text-white text-sm font-bold flex items-center justify-center overflow-hidden"></span>
+                        <span id="sync-dot" class="w-2 h-2 rounded-full bg-slate-300" title=""></span>
+                    </button>
+
+                    <div id="account-menu" class="hidden absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                        <div class="p-4 border-b border-slate-100">
+                            <p id="account-name" class="text-sm font-semibold text-slate-800 truncate"></p>
+                            <p id="account-email" class="text-xs text-slate-500 truncate"></p>
+                            <p id="sync-status" class="text-xs text-slate-500 mt-2 flex items-center gap-1"></p>
+                        </div>
+                        <button onclick="syncNow()" class="w-full text-left px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"><i class="ph ph-arrows-clockwise"></i> 지금 동기화</button>
+                        <button onclick="signOut()" class="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-slate-100"><i class="ph ph-sign-out"></i> 로그아웃</button>
+                    </div>
+
+                </div>
+
+                <button onclick="openSettingsModal()" class="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors" aria-label="환경설정">
+
+                    <i class="ph ph-gear text-xl"></i>
+
+                </button>
+
+            </div>
 
         </div>
 
@@ -962,7 +994,7 @@
 
                     <input type="password" id="input-api-key" placeholder="AI 분석을 위한 키를 입력하세요" class="w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500">
 
-                    <p class="text-xs text-slate-500 mt-2">브라우저의 LocalStorage에만 안전하게 저장됩니다.</p>
+                    <p id="api-key-storage-note" class="text-xs text-slate-500 mt-2">이 브라우저에만 저장됩니다.</p>
 
                 </div>
 
@@ -1170,6 +1202,12 @@
 
  
 
+        function normalizeLoadedState() {
+        if (!state || typeof state !== 'object') state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+        if(!state.keywords) state.keywords = [...DEFAULT_STATE.keywords];
+        if(!state.excludeRules) state.excludeRules = [...DEFAULT_STATE.excludeRules];
+        if(typeof state.apiKey !== 'string') state.apiKey = '';
+
         // Ensure structure exists if upgrading from older version
 
         if(!state.chartData) state.chartData = [];
@@ -1245,6 +1283,8 @@
        
 
         if(!state.fetchRange) state.fetchRange = '7';
+        }
+        normalizeLoadedState();
 
 
  
@@ -1252,6 +1292,8 @@
         function saveState() {
 
             localStorage.setItem('pincetteState', JSON.stringify(state));
+
+            scheduleCloudSave();
 
             // renderAll()을 강제 호출하지 않고, 각 액션 함수에서 필요한 영역만 부분 렌더링하도록 변경했습니다.
 
@@ -1316,6 +1358,293 @@
 
 
  
+
+        // --- Account & Cloud Sync ---
+
+        const SYNC_META_KEY = 'pincetteSyncMeta';
+        const LOCAL_BACKUP_KEY = 'pincetteState.localBackup';
+        const SAVE_DEBOUNCE_MS = 1200;
+        const authConfig = (window.PINCETTE_CONFIG && window.PINCETTE_CONFIG.auth) || null;
+        const sb = authConfig && window.supabase
+            ? window.supabase.createClient(authConfig.supabaseUrl, authConfig.supabaseAnonKey, {
+                auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' }
+            })
+            : null;
+
+        const cloud = {
+            session: null,
+            ready: false,
+            saveTimer: null,
+            saving: false,
+            dirty: false,
+            status: 'idle',
+            apiKeySync: false,
+        };
+
+        function readSyncMeta() {
+            try { return JSON.parse(localStorage.getItem(SYNC_META_KEY) || 'null'); } catch { return null; }
+        }
+        function writeSyncMeta(meta) {
+            if (meta) localStorage.setItem(SYNC_META_KEY, JSON.stringify(meta));
+            else localStorage.removeItem(SYNC_META_KEY);
+        }
+
+        function hasMeaningfulLocalData(s) {
+            return !!s && ((s.articles && s.articles.length) || (s.history && s.history.length) || (s.deletedLog && s.deletedLog.length) || (s.chartData && s.chartData.length));
+        }
+
+        async function cloudFetch(method, body) {
+            const { data } = await sb.auth.getSession();
+            const token = data.session && data.session.access_token;
+            if (!token) throw Object.assign(new Error('로그인이 필요합니다.'), { status: 401 });
+            const response = await fetch('/api/state', {
+                method,
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: body ? JSON.stringify(body) : undefined,
+                cache: 'no-store',
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok && response.status !== 409) {
+                throw Object.assign(new Error(payload.error || `동기화 서버 오류 (상태 코드: ${response.status})`), { status: response.status });
+            }
+            return { status: response.status, payload };
+        }
+
+        function adoptCloudState(remoteState, updatedAt) {
+            const localApiKey = state && state.apiKey;
+            state = JSON.parse(JSON.stringify(remoteState));
+            normalizeLoadedState();
+            if (!state.apiKey && localApiKey) state.apiKey = localApiKey;
+            localStorage.setItem('pincetteState', JSON.stringify(state));
+            writeSyncMeta({ userId: cloud.session.user.id, updatedAt });
+            renderAll();
+        }
+
+        async function startCloudSync() {
+            setSyncStatus('syncing');
+            try {
+                const { payload } = await cloudFetch('GET');
+                cloud.apiKeySync = !!payload.apiKeySync;
+                const meta = readSyncMeta();
+                const userId = cloud.session.user.id;
+
+                if (payload.state) {
+                    const localIsOtherwise = !meta || meta.userId !== userId;
+                    if (localIsOtherwise && hasMeaningfulLocalData(state)) {
+                        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(state));
+                    }
+                    const localHasUnsynced = meta && meta.userId === userId && meta.dirty;
+                    if (localHasUnsynced && meta.updatedAt === payload.updatedAt) {
+                        writeSyncMeta({ userId, updatedAt: payload.updatedAt });
+                        cloud.ready = true;
+                        cloud.dirty = true;
+                        await flushCloudSave();
+                        return;
+                    }
+                    adoptCloudState(payload.state, payload.updatedAt);
+                    if (localIsOtherwise) alert('계정에 저장된 기록을 불러왔습니다.');
+                } else {
+                    const { status, payload: saved } = await cloudFetch('PUT', { state, baseUpdatedAt: null });
+                    if (status === 409 && saved.state) {
+                        adoptCloudState(saved.state, saved.updatedAt);
+                    } else {
+                        writeSyncMeta({ userId, updatedAt: saved.updatedAt });
+                        if (hasMeaningfulLocalData(state)) alert('이 브라우저의 기존 기록을 계정으로 옮겼습니다. 이제 어디서 로그인해도 이어서 쓸 수 있습니다.');
+                    }
+                }
+                cloud.ready = true;
+                setSyncStatus('synced');
+            } catch (e) {
+                console.error(e);
+                setSyncStatus('error', e.message);
+            }
+        }
+
+        function scheduleCloudSave() {
+            if (!sb || !cloud.session || !cloud.ready) return;
+            cloud.dirty = true;
+            const meta = readSyncMeta();
+            if (meta) writeSyncMeta({ ...meta, dirty: true });
+            setSyncStatus('pending');
+            clearTimeout(cloud.saveTimer);
+            cloud.saveTimer = setTimeout(flushCloudSave, SAVE_DEBOUNCE_MS);
+        }
+
+        async function flushCloudSave() {
+            clearTimeout(cloud.saveTimer);
+            if (!cloud.session || !cloud.ready || !cloud.dirty) return;
+            if (cloud.saving) { cloud.saveTimer = setTimeout(flushCloudSave, SAVE_DEBOUNCE_MS); return; }
+            cloud.saving = true;
+            cloud.dirty = false;
+            setSyncStatus('syncing');
+            try {
+                const meta = readSyncMeta();
+                const { status, payload } = await cloudFetch('PUT', { state, baseUpdatedAt: meta && meta.updatedAt });
+                if (status === 409) {
+                    if (payload.state) {
+                        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(state));
+                        adoptCloudState(payload.state, payload.updatedAt);
+                        alert('다른 기기에서 더 최근에 저장한 내용이 있어 그 내용으로 바꿨습니다.');
+                    } else {
+                        writeSyncMeta({ userId: cloud.session.user.id, updatedAt: null });
+                        cloud.dirty = true;
+                    }
+                } else {
+                    writeSyncMeta({ userId: cloud.session.user.id, updatedAt: payload.updatedAt, dirty: cloud.dirty });
+                }
+                setSyncStatus(cloud.dirty ? 'pending' : 'synced');
+            } catch (e) {
+                console.error(e);
+                cloud.dirty = true;
+                setSyncStatus('error', e.message);
+            } finally {
+                cloud.saving = false;
+            }
+            if (cloud.dirty) cloud.saveTimer = setTimeout(flushCloudSave, SAVE_DEBOUNCE_MS * 4);
+        }
+
+        async function pullIfChanged() {
+            if (!cloud.session || !cloud.ready || cloud.dirty || cloud.saving) return;
+            try {
+                const { payload } = await cloudFetch('GET');
+                const meta = readSyncMeta();
+                if (payload.state && (!meta || meta.updatedAt !== payload.updatedAt)) {
+                    adoptCloudState(payload.state, payload.updatedAt);
+                }
+                setSyncStatus('synced');
+            } catch (e) {
+                console.error(e);
+                setSyncStatus('error', e.message);
+            }
+        }
+
+        async function syncNow() {
+            closeAccountMenu();
+            if (cloud.dirty) await flushCloudSave();
+            else await pullIfChanged();
+            if (cloud.status === 'synced') alert('동기화를 마쳤습니다.');
+        }
+
+        const SYNC_LABELS = {
+            idle: ['bg-slate-300', '동기화 준비 중'],
+            pending: ['bg-amber-400', '저장 대기 중'],
+            syncing: ['bg-sky-400 animate-pulse', '동기화 중'],
+            synced: ['bg-emerald-500', '모든 기기에 저장됨'],
+            error: ['bg-red-500', '동기화 실패'],
+        };
+
+        function setSyncStatus(status, detail) {
+            cloud.status = status;
+            const [color, label] = SYNC_LABELS[status] || SYNC_LABELS.idle;
+            const dot = document.getElementById('sync-dot');
+            const text = document.getElementById('sync-status');
+            if (dot) { dot.className = `w-2 h-2 rounded-full ${color}`; dot.title = label; }
+            if (text) {
+                text.innerHTML = '';
+                const mark = document.createElement('span');
+                mark.className = `inline-block w-2 h-2 rounded-full ${color}`;
+                text.appendChild(mark);
+                text.appendChild(document.createTextNode(' ' + label + (detail ? ` · ${detail}` : '')));
+            }
+        }
+
+        function renderAccount() {
+            const area = document.getElementById('account-area');
+            const note = document.getElementById('api-key-storage-note');
+            if (!sb) {
+                area.classList.add('hidden');
+                return;
+            }
+            area.classList.remove('hidden');
+            const user = cloud.session && cloud.session.user;
+            document.getElementById('btn-login').classList.toggle('hidden', !!user);
+            document.getElementById('btn-account').classList.toggle('hidden', !user);
+            if (note) {
+                note.innerText = user && cloud.apiKeySync
+                    ? '계정에 암호화되어 저장되며, 로그인한 다른 기기에서도 사용됩니다.'
+                    : '이 브라우저에만 저장됩니다.';
+            }
+            if (!user) { closeAccountMenu(); return; }
+
+            const meta = user.user_metadata || {};
+            const name = meta.full_name || meta.name || user.email || '사용자';
+            document.getElementById('account-name').innerText = name;
+            document.getElementById('account-email').innerText = user.email || '';
+            const avatar = document.getElementById('account-avatar');
+            avatar.innerHTML = '';
+            if (meta.avatar_url) {
+                const img = document.createElement('img');
+                img.src = meta.avatar_url;
+                img.alt = '';
+                img.referrerPolicy = 'no-referrer';
+                img.className = 'w-full h-full object-cover';
+                img.onerror = () => { avatar.innerText = name.trim().charAt(0).toUpperCase(); };
+                avatar.appendChild(img);
+            } else {
+                avatar.innerText = name.trim().charAt(0).toUpperCase();
+            }
+        }
+
+        function toggleAccountMenu() {
+            document.getElementById('account-menu').classList.toggle('hidden');
+        }
+        function closeAccountMenu() {
+            const menu = document.getElementById('account-menu');
+            if (menu) menu.classList.add('hidden');
+        }
+
+        async function signInWithGoogle() {
+            if (!sb) return;
+            const { error } = await sb.auth.signInWithOAuth({
+                provider: 'google',
+                options: { redirectTo: window.location.origin + '/' },
+            });
+            if (error) alert('Google 로그인을 시작하지 못했습니다. ' + error.message);
+        }
+
+        async function signOut() {
+            closeAccountMenu();
+            if (cloud.dirty) await flushCloudSave();
+            if (cloud.dirty && !confirm('아직 계정에 저장되지 않은 변경이 있습니다. 그래도 로그아웃할까요?')) return;
+            await sb.auth.signOut();
+            localStorage.removeItem('pincetteState');
+            localStorage.removeItem(LOCAL_BACKUP_KEY);
+            writeSyncMeta(null);
+            window.location.replace('/');
+        }
+
+        function initCloudSync() {
+            if (!sb) { renderAccount(); return; }
+            setSyncStatus('idle');
+            const params = new URLSearchParams(window.location.search + window.location.hash.replace(/^#/, '&'));
+            if (params.get('error_description')) {
+                alert('Google 로그인에 실패했습니다. ' + params.get('error_description'));
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+            sb.auth.onAuthStateChange((event, session) => {
+                const previousUser = cloud.session && cloud.session.user.id;
+                cloud.session = session;
+                renderAccount();
+                if (!session) { cloud.ready = false; return; }
+                if (session.user.id !== previousUser) {
+                    cloud.ready = false;
+                    // Defer out of the auth callback: supabase-js deadlocks if its own API is awaited inside it.
+                    setTimeout(() => startCloudSync().then(renderAccount), 0);
+                }
+                if (window.location.search.includes('code=')) {
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }
+            });
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') flushCloudSave();
+                else pullIfChanged();
+            });
+            window.addEventListener('online', () => { if (cloud.dirty) flushCloudSave(); else pullIfChanged(); });
+            document.addEventListener('click', (e) => {
+                const area = document.getElementById('account-area');
+                if (area && !area.contains(e.target)) closeAccountMenu();
+            });
+        }
 
         // --- Modals ---
 
@@ -3049,6 +3378,8 @@
             initScheduleDropdowns();
 
             renderAll();
+
+            initCloudSync();
 
             // Handle window resize for chart
 
