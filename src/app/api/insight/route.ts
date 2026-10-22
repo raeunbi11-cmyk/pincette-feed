@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
 const MODEL = "gemini-3.8-flash";
+const FALLBACK_MODEL = "gemini-flash-latest";
 const ATTEMPT_MS = 20_000;
 const RETRY_PAUSE_MS = 1_500;
 const MAX_ATTEMPTS = 2;
@@ -144,13 +145,46 @@ function friendlyGeminiError(message: string, status: number): string {
   return `Gemini가 요청을 처리하지 못했습니다. (상태 코드: ${status})`;
 }
 
-async function requestInsight(apiKey: string, prompt: string): Promise<{ data: unknown } | { error: string }> {
+type AttemptFailure = { model: string; status: number; message: string };
+
+type InsightResult =
+  | { data: unknown; model: string; failures: AttemptFailure[] }
+  | { error: string; failures: AttemptFailure[] };
+
+function isOverloaded(failure: AttemptFailure): boolean {
+  const lower = failure.message.toLowerCase();
+  return failure.status === 503 || lower.includes("high demand") || lower.includes("overloaded");
+}
+
+async function requestInsight(apiKey: string, prompt: string): Promise<InsightResult> {
+  const failures: AttemptFailure[] = [];
+  const primary = await requestModel(apiKey, prompt, MODEL, MAX_ATTEMPTS, failures);
+  if ("data" in primary) return { data: primary.data, model: MODEL, failures };
+
+  const last = failures[failures.length - 1];
+  if (!last || !isOverloaded(last)) return { error: primary.error, failures };
+
+  const fallback = await requestModel(apiKey, prompt, FALLBACK_MODEL, 1, failures);
+  if ("data" in fallback) return { data: fallback.data, model: FALLBACK_MODEL, failures };
+
+  const fallbackFailure = failures[failures.length - 1];
+  const modelMissing = fallbackFailure?.model === FALLBACK_MODEL && fallbackFailure.status === 404;
+  return { error: modelMissing ? primary.error : fallback.error, failures };
+}
+
+async function requestModel(
+  apiKey: string,
+  prompt: string,
+  model: string,
+  maxAttempts: number,
+  failures: AttemptFailure[],
+): Promise<{ data: unknown } | { error: string }> {
   let lastError = "Gemini가 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const { status, data } = await postJson(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
@@ -168,18 +202,22 @@ async function requestInsight(apiKey: string, prompt: string): Promise<{ data: u
       if (status >= 200 && status < 300) return { data };
 
       const message = geminiErrorText(data);
-      lastError = friendlyGeminiError(message, status);
+      failures.push({ model, status, message });
+      console.error("[insight]", model, status, message);
+      lastError = `${friendlyGeminiError(message, status)} (${model} · 상태 코드 ${status})`;
       if (!isRetryableStatus(status)) return { error: lastError };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ model, status: 0, message });
+      console.error("[insight]", model, "network", message);
       if (isTimeoutError(error)) {
-        lastError = "Gemini가 20초 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다.";
+        lastError = `Gemini가 20초 안에 분석을 끝내지 못했습니다. 같은 버튼으로 잠시 뒤 다시 요청하면 됩니다. (${model})`;
       } else {
-        console.error("[insight]", error instanceof Error ? error.message : error);
-        lastError = "Gemini 서버에 연결하지 못했습니다. 잠시 뒤 다시 요청해 주세요.";
+        lastError = `Gemini 서버에 연결하지 못했습니다. 잠시 뒤 다시 요청해 주세요. (${model})`;
       }
     }
 
-    if (attempt < MAX_ATTEMPTS - 1) {
+    if (attempt < maxAttempts - 1) {
       await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
     }
   }
@@ -209,7 +247,7 @@ export async function POST(request: Request) {
   try {
     const result = await requestInsight(apiKey, insightPrompt(logs));
     if ("error" in result) {
-      return NextResponse.json({ error: result.error }, { status: 502 });
+      return NextResponse.json({ error: result.error, detail: result.failures }, { status: 502 });
     }
     const data = result.data;
 
